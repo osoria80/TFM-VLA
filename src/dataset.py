@@ -50,21 +50,82 @@ def mapear_indices_globales(indices_globales, directorio_videos):
 
 
 class VLADataset(Dataset):
-    def __init__(self, tabla, preprocess, tokenizer):
+    def __init__(
+        self, tabla, preprocess, tokenizer, lectura_secuencial=False, tamano_bloque=1024
+    ):
         self.tabla = tabla.reset_index(drop=True)
         self.preprocess = preprocess
         self.tokenizer = tokenizer
+        self.lectura_secuencial = lectura_secuencial
+        self.tamano_bloque = tamano_bloque
+        self._captura = None
+        self._ruta_abierta = None
+        self._ultimo_frame = -1
+        self._inicio_bloque = None
+        self._tokens_por_instruccion = {}
 
     def __len__(self):
         return len(self.tabla)
+
+    def _cargar_fotograma_secuencial(self, ruta_video, indice_fotograma):
+        """Lee frames ordenados sin reiniciar la decodificacion del MP4."""
+        ruta_video = str(ruta_video)
+        indice_fotograma = int(indice_fotograma)
+
+        nuevo_bloque = (
+            self._inicio_bloque is None
+            or indice_fotograma < self._inicio_bloque
+            or indice_fotograma >= self._inicio_bloque + self.tamano_bloque
+        )
+        if self._ruta_abierta != ruta_video or indice_fotograma <= self._ultimo_frame or nuevo_bloque:
+            if self._captura is not None:
+                self._captura.release()
+            self._captura = cv2.VideoCapture(ruta_video)
+            self._ruta_abierta = ruta_video
+            self._inicio_bloque = (indice_fotograma // self.tamano_bloque) * self.tamano_bloque
+            self._captura.set(cv2.CAP_PROP_POS_FRAMES, self._inicio_bloque)
+            self._ultimo_frame = self._inicio_bloque - 1
+
+        imagen_bgr = None
+        while self._ultimo_frame < indice_fotograma:
+            correcto, imagen_bgr = self._captura.read()
+            self._ultimo_frame += 1
+            if not correcto:
+                raise RuntimeError(
+                    f"No se pudo leer el fotograma {indice_fotograma} de {ruta_video}"
+                )
+
+        return Image.fromarray(cv2.cvtColor(imagen_bgr, cv2.COLOR_BGR2RGB))
+
+    def cerrar_video(self):
+        """Libera el lector secuencial al terminar la extraccion."""
+        if self._captura is not None:
+            self._captura.release()
+            self._captura = None
+        self._ruta_abierta = None
+        self._inicio_bloque = None
 
     def __getitem__(self, indice):
         muestra = self.tabla.iloc[indice]
 
         # La imagen se decodifica bajo demanda para no cargar todos los vídeos en memoria.
-        imagen = cargar_fotograma(muestra["imagen"], muestra["fotograma_video"])
+        if self.lectura_secuencial:
+            try:
+                imagen = self._cargar_fotograma_secuencial(
+                    muestra["imagen"], muestra["fotograma_video"]
+                )
+            except RuntimeError:
+                # Reintento aislado si el decodificador falla dentro de un bloque.
+                self.cerrar_video()
+                imagen = cargar_fotograma(muestra["imagen"], muestra["fotograma_video"])
+        else:
+            # La lectura aleatoria se reserva para inspecciones y entrenamiento.
+            imagen = cargar_fotograma(muestra["imagen"], muestra["fotograma_video"])
         imagen = self.preprocess(imagen)
-        tokens = self.tokenizer([muestra["instruccion"]])[0]
+        instruccion = muestra["instruccion"]
+        if instruccion not in self._tokens_por_instruccion:
+            self._tokens_por_instruccion[instruccion] = self.tokenizer([instruccion])[0]
+        tokens = self._tokens_por_instruccion[instruccion]
         accion = torch.tensor(muestra["accion"], dtype=torch.float32)
 
         return imagen, tokens, accion

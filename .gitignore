@@ -1,0 +1,8 @@
+# Ignorar carpetas completas desde la raíz
+checkpoints/
+data/
+figures/
+images/
+results/
+.venv/
+.vscode/
