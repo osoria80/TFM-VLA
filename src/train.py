@@ -9,14 +9,17 @@ from torch import nn
 
 
 def action_loss(predictions: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
-    """Calcula MSE para las 7 componentes físicas y BCE para termination."""
+    """MSE para x..rz y BCE para terminate y la pinza binaria."""
     if predictions.shape != targets.shape or predictions.shape[-1] != 8:
         raise ValueError("predictions y targets deben tener forma (batch, 8)")
-    termination_loss = nn.functional.binary_cross_entropy(
+    terminate_loss = nn.functional.binary_cross_entropy(
         predictions[:, 0], targets[:, 0]
     )
-    physical_loss = nn.functional.mse_loss(predictions[:, 1:], targets[:, 1:])
-    return physical_loss + termination_loss
+    physical_loss = nn.functional.mse_loss(predictions[:, 1:7], targets[:, 1:7])
+    gripper_loss = nn.functional.binary_cross_entropy(
+        predictions[:, 7], targets[:, 7]
+    )
+    return physical_loss + terminate_loss + gripper_loss
 
 
 def calcular_perdida_accion(predictions: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
