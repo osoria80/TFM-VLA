@@ -7,19 +7,14 @@ from typing import Any, Dict, List, Optional
 import torch
 from torch import nn
 
+from .evaluation import action_loss_components
+
 
 def action_loss(predictions: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
     """MSE para x..rz y BCE para terminate y la pinza binaria."""
     if predictions.shape != targets.shape or predictions.shape[-1] != 8:
         raise ValueError("predictions y targets deben tener forma (batch, 8)")
-    terminate_loss = nn.functional.binary_cross_entropy(
-        predictions[:, 0], targets[:, 0]
-    )
-    physical_loss = nn.functional.mse_loss(predictions[:, 1:7], targets[:, 1:7])
-    gripper_loss = nn.functional.binary_cross_entropy(
-        predictions[:, 7], targets[:, 7]
-    )
-    return physical_loss + terminate_loss + gripper_loss
+    return sum(action_loss_components(predictions, targets).values())
 
 
 def calcular_perdida_accion(predictions: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
@@ -30,7 +25,7 @@ def calcular_perdida_accion(predictions: torch.Tensor, targets: torch.Tensor) ->
 def train_one_epoch(model, loader, optimizer, device) -> Dict[str, float]:
     """Ejecuta una época y devuelve su pérdida media y duración."""
     model.train()
-    total_loss = 0.0
+    total_loss = total_actions = total_terminate = total_gripper = 0.0
     total_samples = 0
     start = time.perf_counter()
 
@@ -41,15 +36,22 @@ def train_one_epoch(model, loader, optimizer, device) -> Dict[str, float]:
 
         optimizer.zero_grad(set_to_none=True)
         predictions = model(image_embeddings=image_embeddings, text_embeddings=text_embeddings)
-        loss = action_loss(predictions, targets)
+        components = action_loss_components(predictions, targets)
+        loss = sum(components.values())
         loss.backward()
         optimizer.step()
 
         total_loss += loss.item() * len(targets)
+        total_actions += components["actions_loss"].item() * len(targets)
+        total_terminate += components["terminate_loss"].item() * len(targets)
+        total_gripper += components["gripper_loss"].item() * len(targets)
         total_samples += len(targets)
 
     return {
         "loss": total_loss / max(total_samples, 1),
+        "actions_loss": total_actions / max(total_samples, 1),
+        "terminate_loss": total_terminate / max(total_samples, 1),
+        "gripper_loss": total_gripper / max(total_samples, 1),
         "time_seconds": time.perf_counter() - start,
     }
 
@@ -58,7 +60,7 @@ def train_one_epoch(model, loader, optimizer, device) -> Dict[str, float]:
 def validate_one_epoch(model, loader, device) -> Dict[str, float]:
     """Calcula la pérdida media de validación sin modificar los pesos."""
     model.eval()
-    total_loss = 0.0
+    total_loss = total_actions = total_terminate = total_gripper = 0.0
     total_samples = 0
     start = time.perf_counter()
 
@@ -67,12 +69,19 @@ def validate_one_epoch(model, loader, device) -> Dict[str, float]:
             image_embeddings=image_embeddings.to(device),
             text_embeddings=text_embeddings.to(device),
         )
-        loss = action_loss(predictions, targets.to(device))
+        components = action_loss_components(predictions, targets.to(device))
+        loss = sum(components.values())
         total_loss += loss.item() * len(targets)
+        total_actions += components["actions_loss"].item() * len(targets)
+        total_terminate += components["terminate_loss"].item() * len(targets)
+        total_gripper += components["gripper_loss"].item() * len(targets)
         total_samples += len(targets)
 
     return {
         "loss": total_loss / max(total_samples, 1),
+        "actions_loss": total_actions / max(total_samples, 1),
+        "terminate_loss": total_terminate / max(total_samples, 1),
+        "gripper_loss": total_gripper / max(total_samples, 1),
         "time_seconds": time.perf_counter() - start,
     }
 
@@ -138,6 +147,12 @@ def train_model(
             "epoch": epoch,
             "train_loss": train_metrics["loss"],
             "validation_loss": validation_metrics["loss"],
+            "train_actions_loss": train_metrics["actions_loss"],
+            "train_terminate_loss": train_metrics["terminate_loss"],
+            "train_gripper_loss": train_metrics["gripper_loss"],
+            "validation_actions_loss": validation_metrics["actions_loss"],
+            "validation_terminate_loss": validation_metrics["terminate_loss"],
+            "validation_gripper_loss": validation_metrics["gripper_loss"],
             "time_train_seconds": train_metrics["time_seconds"],
             "time_validation_seconds": validation_metrics["time_seconds"],
             "time_epoch_seconds": train_metrics["time_seconds"] + validation_metrics["time_seconds"],
