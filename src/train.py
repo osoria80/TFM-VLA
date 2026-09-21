@@ -29,13 +29,18 @@ def train_one_epoch(model, loader, optimizer, device) -> Dict[str, float]:
     total_samples = 0
     start = time.perf_counter()
 
-    for image_embeddings, text_embeddings, targets in loader:
-        image_embeddings = image_embeddings.to(device)
+    for static_embeddings, gripper_embeddings, text_embeddings, targets in loader:
+        static_embeddings = static_embeddings.to(device)
+        gripper_embeddings = gripper_embeddings.to(device)
         text_embeddings = text_embeddings.to(device)
         targets = targets.to(device)
 
         optimizer.zero_grad(set_to_none=True)
-        predictions = model(image_embeddings=image_embeddings, text_embeddings=text_embeddings)
+        predictions = model(
+            static_embeddings=static_embeddings,
+            gripper_embeddings=gripper_embeddings,
+            text_embeddings=text_embeddings,
+        )
         components = action_loss_components(predictions, targets)
         loss = sum(components.values())
         loss.backward()
@@ -64,9 +69,10 @@ def validate_one_epoch(model, loader, device) -> Dict[str, float]:
     total_samples = 0
     start = time.perf_counter()
 
-    for image_embeddings, text_embeddings, targets in loader:
+    for static_embeddings, gripper_embeddings, text_embeddings, targets in loader:
         predictions = model(
-            image_embeddings=image_embeddings.to(device),
+            static_embeddings=static_embeddings.to(device),
+            gripper_embeddings=gripper_embeddings.to(device),
             text_embeddings=text_embeddings.to(device),
         )
         components = action_loss_components(predictions, targets.to(device))
