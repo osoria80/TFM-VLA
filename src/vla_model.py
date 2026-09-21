@@ -32,19 +32,29 @@ class VLA(nn.Module):
 
     def forward(
         self,
-        image_embeddings: Optional[torch.Tensor] = None,
+        static_embeddings: Optional[torch.Tensor] = None,
+        gripper_embeddings: Optional[torch.Tensor] = None,
         text_embeddings: Optional[torch.Tensor] = None,
-        images: Optional[torch.Tensor] = None,
+        images_static: Optional[torch.Tensor] = None,
+        images_gripper: Optional[torch.Tensor] = None,
         text_tokens: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """Genera acciones a partir de embeddings o, si se proporcionan, de entradas CLIP."""
-        if image_embeddings is None or text_embeddings is None:
-            if self.clip_encoder is None or images is None or text_tokens is None:
-                raise ValueError("Proporciona ambos embeddings o images, text_tokens y clip_encoder")
-            image_embeddings = self.clip_encoder.encode_image(images)
+        if static_embeddings is None or gripper_embeddings is None or text_embeddings is None:
+            if (
+                self.clip_encoder is None
+                or images_static is None
+                or images_gripper is None
+                or text_tokens is None
+            ):
+                raise ValueError("Proporciona los tres embeddings o images_static, images_gripper, text_tokens y clip_encoder")
+            static_embeddings = self.clip_encoder.encode_image(images_static)
+            gripper_embeddings = self.clip_encoder.encode_image(images_gripper)
             text_embeddings = self.clip_encoder.encode_text(text_tokens)
 
-        fused = self.fusion(image_embeddings.float(), text_embeddings.float())
+        fused = self.fusion(
+            static_embeddings.float(), gripper_embeddings.float(), text_embeddings.float()
+        )
         return self.decoder(fused)
 
 
