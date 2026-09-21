@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional
 
 import torch
 from torch import nn
+from tqdm.auto import tqdm
 
 from .evaluation import action_loss_components
 
@@ -22,14 +23,15 @@ def calcular_perdida_accion(predictions: torch.Tensor, targets: torch.Tensor) ->
     return action_loss(predictions, targets)
 
 
-def train_one_epoch(model, loader, optimizer, device) -> Dict[str, float]:
+def train_one_epoch(model, loader, optimizer, device, progress_description: str = "Entrenamiento") -> Dict[str, float]:
     """Ejecuta una época y devuelve su pérdida media y duración."""
     model.train()
     total_loss = total_actions = total_terminate = total_gripper = 0.0
     total_samples = 0
     start = time.perf_counter()
 
-    for static_embeddings, gripper_embeddings, text_embeddings, targets in loader:
+    progress = tqdm(loader, desc=progress_description, unit="lote", leave=False, mininterval=1.0)
+    for batch_index, (static_embeddings, gripper_embeddings, text_embeddings, targets) in enumerate(progress, start=1):
         static_embeddings = static_embeddings.to(device)
         gripper_embeddings = gripper_embeddings.to(device)
         text_embeddings = text_embeddings.to(device)
@@ -51,6 +53,8 @@ def train_one_epoch(model, loader, optimizer, device) -> Dict[str, float]:
         total_terminate += components["terminate_loss"].item() * len(targets)
         total_gripper += components["gripper_loss"].item() * len(targets)
         total_samples += len(targets)
+        if batch_index % 50 == 0 or batch_index == len(loader):
+            progress.set_postfix(loss=f"{total_loss / total_samples:.6f}")
 
     return {
         "loss": total_loss / max(total_samples, 1),
@@ -62,14 +66,15 @@ def train_one_epoch(model, loader, optimizer, device) -> Dict[str, float]:
 
 
 @torch.no_grad()
-def validate_one_epoch(model, loader, device) -> Dict[str, float]:
+def validate_one_epoch(model, loader, device, progress_description: str = "Validación") -> Dict[str, float]:
     """Calcula la pérdida media de validación sin modificar los pesos."""
     model.eval()
     total_loss = total_actions = total_terminate = total_gripper = 0.0
     total_samples = 0
     start = time.perf_counter()
 
-    for static_embeddings, gripper_embeddings, text_embeddings, targets in loader:
+    progress = tqdm(loader, desc=progress_description, unit="lote", leave=False, mininterval=1.0)
+    for batch_index, (static_embeddings, gripper_embeddings, text_embeddings, targets) in enumerate(progress, start=1):
         predictions = model(
             static_embeddings=static_embeddings.to(device),
             gripper_embeddings=gripper_embeddings.to(device),
@@ -82,6 +87,8 @@ def validate_one_epoch(model, loader, device) -> Dict[str, float]:
         total_terminate += components["terminate_loss"].item() * len(targets)
         total_gripper += components["gripper_loss"].item() * len(targets)
         total_samples += len(targets)
+        if batch_index % 50 == 0 or batch_index == len(loader):
+            progress.set_postfix(loss=f"{total_loss / total_samples:.6f}")
 
     return {
         "loss": total_loss / max(total_samples, 1),
@@ -147,8 +154,14 @@ def train_model(
     training_start = time.perf_counter()
 
     for epoch in range(1, epochs + 1):
-        train_metrics = train_one_epoch(model, train_loader, optimizer, device)
-        validation_metrics = validate_one_epoch(model, validation_loader, device)
+        train_metrics = train_one_epoch(
+            model, train_loader, optimizer, device,
+            progress_description=f"Entrenamiento {epoch}/{epochs}",
+        )
+        validation_metrics = validate_one_epoch(
+            model, validation_loader, device,
+            progress_description=f"Validación {epoch}/{epochs}",
+        )
         row = {
             "epoch": epoch,
             "train_loss": train_metrics["loss"],
