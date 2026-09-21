@@ -17,8 +17,9 @@ class ActionDecoder(nn.Module):
         )
 
     def forward(self, fused_embedding: torch.Tensor) -> torch.Tensor:
-        if fused_embedding.ndim != 2 or fused_embedding.shape[-1] != 256:
-            raise ValueError("La entrada del decodificador debe tener forma (batch, 256)")
+        expected_dim = self.network[0].in_features
+        if fused_embedding.ndim != 2 or fused_embedding.shape[-1] != expected_dim:
+            raise ValueError(f"La entrada del decodificador debe tener forma (batch, {expected_dim})")
         return self.network(fused_embedding)
 
 

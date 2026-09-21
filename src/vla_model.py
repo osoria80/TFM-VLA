@@ -18,10 +18,22 @@ class VLA(nn.Module):
         embedding_dim: int = 512,
         fusion_dim: int = 256,
         decoder_hidden_dim: int = 128,
+        num_layers: int = 2,
+        num_heads: int = 4,
+        feedforward_dim: int | None = None,
+        dropout: float = 0.1,
     ) -> None:
         super().__init__()
         self.clip_encoder = clip_encoder
-        self.fusion = MultimodalTransformer(embedding_dim, fusion_dim)
+        # Estos argumentos permiten comparar variantes sin duplicar el modelo.
+        self.fusion = MultimodalTransformer(
+            embedding_dim=embedding_dim,
+            hidden_dim=fusion_dim,
+            num_layers=num_layers,
+            num_heads=num_heads,
+            feedforward_dim=feedforward_dim or fusion_dim * 2,
+            dropout=dropout,
+        )
         self.decoder = ActionDecoder(fusion_dim, decoder_hidden_dim, 8)
 
         # El encoder se usa solo para generar features; sus pesos no se entrenan.
