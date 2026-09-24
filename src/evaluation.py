@@ -12,16 +12,50 @@ from torch import nn
 CONTINUOUS_NAMES = ("x", "y", "z", "rx", "ry", "rz")
 
 
-def action_loss_components(predictions: torch.Tensor, targets: torch.Tensor) -> dict[str, torch.Tensor]:
-    """Devuelve MSE físico y BCE de terminate y pinza por separado."""
+def action_loss_components(
+    predictions: torch.Tensor,
+    targets: torch.Tensor,
+    terminate_positive_weight: float = 1.0,
+) -> dict[str, torch.Tensor]:
+    """Devuelve MSE físico, BCE de pinza y BCE ponderada de terminate."""
+    if terminate_positive_weight <= 0:
+        raise ValueError("terminate_positive_weight debe ser positivo")
+    terminate_weights = torch.where(
+        targets[:, 0] >= 0.5,
+        torch.full_like(targets[:, 0], terminate_positive_weight),
+        torch.ones_like(targets[:, 0]),
+    )
     return {
         "actions_loss": nn.functional.mse_loss(predictions[:, 1:7], targets[:, 1:7]),
-        "terminate_loss": nn.functional.binary_cross_entropy(predictions[:, 0], targets[:, 0]),
+        "terminate_loss": nn.functional.binary_cross_entropy(
+            predictions[:, 0], targets[:, 0], weight=terminate_weights
+        ),
         "gripper_loss": nn.functional.binary_cross_entropy(predictions[:, 7], targets[:, 7]),
     }
 
 
-def evaluate_actions(predictions, targets, minimum, scale) -> dict:
+def select_f1_threshold(predictions, targets) -> float:
+    """Selecciona en validation el umbral que maximiza el F1 de una salida binaria."""
+    predicted = np.asarray(predictions, dtype=np.float32).reshape(-1)
+    expected = np.asarray(targets, dtype=np.float32).reshape(-1) >= 0.5
+    if len(predicted) != len(expected) or len(predicted) == 0:
+        raise ValueError("predictions y targets deben tener la misma longitud no nula")
+
+    best_threshold, best_f1 = 0.5, -1.0
+    for threshold in np.linspace(0.01, 0.99, 99):
+        estimated = predicted >= threshold
+        true_positives = np.logical_and(expected, estimated).sum()
+        false_positives = np.logical_and(~expected, estimated).sum()
+        false_negatives = np.logical_and(expected, ~estimated).sum()
+        precision = true_positives / (true_positives + false_positives) if true_positives + false_positives else 0.0
+        recall = true_positives / (true_positives + false_negatives) if true_positives + false_negatives else 0.0
+        f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
+        if f1 > best_f1 or (np.isclose(f1, best_f1) and abs(threshold - 0.5) < abs(best_threshold - 0.5)):
+            best_threshold, best_f1 = float(threshold), float(f1)
+    return best_threshold
+
+
+def evaluate_actions(predictions, targets, minimum, scale, terminate_threshold: float = 0.5) -> dict:
     """Métricas predictivas; no incluye tiempos ni parámetros."""
     predicted = np.asarray(predictions, dtype=np.float32)
     expected = np.asarray(targets, dtype=np.float32)
@@ -36,9 +70,9 @@ def evaluate_actions(predictions, targets, minimum, scale) -> dict:
     divisor = np.linalg.norm(xyz_predicted, axis=1) * np.linalg.norm(xyz_expected, axis=1)
     cosine = np.divide((xyz_predicted * xyz_expected).sum(axis=1), divisor, out=np.zeros_like(divisor), where=divisor > 0)
 
-    def classification(index):
+    def classification(index, threshold=0.5):
         real = expected[:, index] >= 0.5
-        estimated = predicted[:, index] >= 0.5
+        estimated = predicted[:, index] >= threshold
         tp = int(np.logical_and(real, estimated).sum())
         fp = int(np.logical_and(~real, estimated).sum())
         fn = int(np.logical_and(real, ~estimated).sum())
@@ -53,7 +87,8 @@ def evaluate_actions(predictions, targets, minimum, scale) -> dict:
             "mae_by_component": dict(zip(CONTINUOUS_NAMES, mae.tolist())),
             "rmse_by_component": dict(zip(CONTINUOUS_NAMES, rmse.tolist()))},
             "xyz_denormalized_cosine_similarity": float(cosine.mean()),
-            "terminate": classification(0), "gripper": classification(7)}
+            "terminate": {**classification(0, terminate_threshold), "threshold": float(terminate_threshold)},
+            "gripper": classification(7)}
 
 
 def benchmark_inference(predict: Callable[[], None], samples: int, repeats: int = 5) -> dict:

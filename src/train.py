@@ -11,19 +11,34 @@ from tqdm.auto import tqdm
 from .evaluation import action_loss_components
 
 
-def action_loss(predictions: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+def action_loss(
+    predictions: torch.Tensor,
+    targets: torch.Tensor,
+    terminate_positive_weight: float = 1.0,
+) -> torch.Tensor:
     """MSE para x..rz y BCE para terminate y la pinza binaria."""
     if predictions.shape != targets.shape or predictions.shape[-1] != 8:
         raise ValueError("predictions y targets deben tener forma (batch, 8)")
-    return sum(action_loss_components(predictions, targets).values())
+    return sum(action_loss_components(predictions, targets, terminate_positive_weight).values())
 
 
-def calcular_perdida_accion(predictions: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+def calcular_perdida_accion(
+    predictions: torch.Tensor,
+    targets: torch.Tensor,
+    terminate_positive_weight: float = 1.0,
+) -> torch.Tensor:
     """Alias en español para mantener una interfaz cómoda en los notebooks."""
-    return action_loss(predictions, targets)
+    return action_loss(predictions, targets, terminate_positive_weight)
 
 
-def train_one_epoch(model, loader, optimizer, device, progress_description: str = "Entrenamiento") -> Dict[str, float]:
+def train_one_epoch(
+    model,
+    loader,
+    optimizer,
+    device,
+    progress_description: str = "Entrenamiento",
+    terminate_positive_weight: float = 1.0,
+) -> Dict[str, float]:
     """Ejecuta una época y devuelve su pérdida media y duración."""
     model.train()
     total_loss = total_actions = total_terminate = total_gripper = 0.0
@@ -43,7 +58,7 @@ def train_one_epoch(model, loader, optimizer, device, progress_description: str 
             gripper_embeddings=gripper_embeddings,
             text_embeddings=text_embeddings,
         )
-        components = action_loss_components(predictions, targets)
+        components = action_loss_components(predictions, targets, terminate_positive_weight)
         loss = sum(components.values())
         loss.backward()
         optimizer.step()
@@ -66,7 +81,13 @@ def train_one_epoch(model, loader, optimizer, device, progress_description: str 
 
 
 @torch.no_grad()
-def validate_one_epoch(model, loader, device, progress_description: str = "Validación") -> Dict[str, float]:
+def validate_one_epoch(
+    model,
+    loader,
+    device,
+    progress_description: str = "Validación",
+    terminate_positive_weight: float = 1.0,
+) -> Dict[str, float]:
     """Calcula la pérdida media de validación sin modificar los pesos."""
     model.eval()
     total_loss = total_actions = total_terminate = total_gripper = 0.0
@@ -80,7 +101,7 @@ def validate_one_epoch(model, loader, device, progress_description: str = "Valid
             gripper_embeddings=gripper_embeddings.to(device),
             text_embeddings=text_embeddings.to(device),
         )
-        components = action_loss_components(predictions, targets.to(device))
+        components = action_loss_components(predictions, targets.to(device), terminate_positive_weight)
         loss = sum(components.values())
         total_loss += loss.item() * len(targets)
         total_actions += components["actions_loss"].item() * len(targets)
@@ -142,6 +163,7 @@ def train_model(
     patience: int = 7,
     checkpoint_path=None,
     config: Optional[Dict[str, Any]] = None,
+    terminate_positive_weight: float = 1.0,
 ) -> Dict[str, Any]:
     """Entrena con early stopping y conserva únicamente el mejor checkpoint."""
     if epochs < 1 or patience < 1:
@@ -157,10 +179,12 @@ def train_model(
         train_metrics = train_one_epoch(
             model, train_loader, optimizer, device,
             progress_description=f"Entrenamiento {epoch}/{epochs}",
+            terminate_positive_weight=terminate_positive_weight,
         )
         validation_metrics = validate_one_epoch(
             model, validation_loader, device,
             progress_description=f"Validación {epoch}/{epochs}",
+            terminate_positive_weight=terminate_positive_weight,
         )
         row = {
             "epoch": epoch,
